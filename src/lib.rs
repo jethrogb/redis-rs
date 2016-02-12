@@ -302,22 +302,21 @@
 //! heavily encouraged to use the URL based configuration format which
 //! is a lot more stable than the structs.
 
+#![feature(collections)]
+#![no_std]
+
 #![deny(non_camel_case_types)]
 
-extern crate url;
 extern crate rustc_serialize as serialize;
 extern crate sha1;
-
-#[cfg(feature="unix_socket")]
-extern crate unix_socket;
+#[macro_use]
+extern crate collections;
+extern crate core_collections;
 
 /* public api */
-pub use parser::{parse_redis_value, Parser};
-pub use client::Client;
+pub use parser::Parser;
 pub use script::{Script, ScriptInvocation};
-pub use connection::{Connection, ConnectionLike, ConnectionInfo,
-                     ConnectionAddr, IntoConnectionInfo, PubSub, Msg, transaction,
-                     parse_redis_url};
+pub use connection::{ConnectionLike, transaction};
 pub use cmd::{cmd, Cmd, pipe, Pipeline, Iter, pack_command};
 pub use commands::{
     Commands,
@@ -326,6 +325,9 @@ pub use commands::{
 
 #[doc(hidden)]
 pub use types::{
+    Read,
+    ReadError,
+
     /* low level values */
     Value,
 
@@ -351,7 +353,6 @@ pub use types::{
 mod macros;
 
 mod parser;
-mod client;
 mod connection;
 mod types;
 mod script;

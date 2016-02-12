@@ -1,8 +1,6 @@
 use types::{FromRedisValue, ToRedisArgs, RedisResult, NumericBehavior};
-use client::Client;
-use connection::{Connection, ConnectionLike};
+use connection::ConnectionLike;
 use cmd::{cmd, Cmd, Pipeline, Iter};
-
 
 macro_rules! implement_commands {
     (
@@ -716,9 +714,6 @@ implement_commands! {
         cmd("PFMERGE").arg(dstkey).arg(srckeys)
     }
 }
-
-impl Commands for Connection {}
-impl Commands for Client {}
 
 impl PipelineCommands for Pipeline {
     fn perform(&mut self, cmd: &Cmd) -> &mut Pipeline {

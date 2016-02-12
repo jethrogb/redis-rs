@@ -1,6 +1,8 @@
 use types::{ToRedisArgs, FromRedisValue, Value, RedisResult,
             ErrorKind, from_redis_value};
 use connection::ConnectionLike;
+use collections::Vec;
+use collections::string::ToString;
 
 #[derive(Clone)]
 enum Arg<'a> {

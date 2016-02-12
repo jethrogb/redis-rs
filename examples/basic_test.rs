@@ -1,116 +1,89 @@
 extern crate redis;
+extern crate core_collections;
 extern crate rustc_serialize as serialize;
+extern crate unix_socket;
 
-use redis::{Commands, PipelineCommands};
+use redis::{Commands, PipelineCommands, RedisResult, Value, Parser};
 
-use std::process;
-use std::thread::{spawn, sleep};
-use std::time::Duration;
-use std::collections::{HashMap, HashSet};
+use core_collections::{HashMap, HashSet};
 
-#[cfg(feature="unix_socket")]
-use std::path::PathBuf;
+use std::io::{Read,Write};
+use unix_socket::UnixStream;
+use std::cell::RefCell;
 
-pub static SERVER_PORT: u16 = 38991;
-pub static SERVER_UNIX_PATH: &'static str = "/tmp/redis-rs-test.sock";
-
-pub struct RedisServer {
-    pub process: process::Child,
+trait GetConnection<T: redis::ConnectionLike> {
+    fn connection(self) -> T;
 }
 
-impl RedisServer {
+struct ReadWrap(UnixStream);
 
-    pub fn new() -> RedisServer {
-        let mut cmd = process::Command::new("redis-server");
-        cmd
-            .stdout(process::Stdio::null())
-            .stderr(process::Stdio::null())
-            .arg("--port").arg(SERVER_PORT.to_string())
-            .arg("--bind").arg("127.0.0.1");
-
-        if cfg!(feature="unix_socket") {
-            cmd.arg("--unixsocket").arg(SERVER_UNIX_PATH);
-        }
-
-        let process = cmd.spawn().unwrap();
-        RedisServer { process: process }
-    }
-
-    pub fn wait(&mut self) {
-        self.process.wait().unwrap();
-    }
-
-    pub fn foo(&mut self) {
-    }
-
-    #[cfg(not(feature="unix_socket"))]
-    pub fn get_client_addr(&self) -> redis::ConnectionAddr {
-        redis::ConnectionAddr::Tcp("127.0.0.1".to_string(), SERVER_PORT)
-    }
-
-    #[cfg(feature="unix_socket")]
-    pub fn get_client_addr(&self) -> redis::ConnectionAddr {
-        redis::ConnectionAddr::Unix(PathBuf::from(SERVER_UNIX_PATH))
+impl<'a> redis::Read for &'a mut ReadWrap {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize,redis::ReadError> {
+        self.0.read(buf).map_err(|_|redis::ReadError)
     }
 }
 
-impl Drop for RedisServer {
-
-    fn drop(&mut self) {
-        let _ = self.process.kill();
-        let _ = self.process.wait();
-    }
-}
-
-pub struct TestContext {
-    pub server: RedisServer,
-    pub client: redis::Client,
+struct TestContext {
+    con: RefCell<ReadWrap>,
 }
 
 impl TestContext {
+    fn sock_path() -> std::ffi::OsString {
+        let mut args=std::env::args_os();
+        args.next();
+        args.next().expect("Usage: basic_test /path/to/redis.sock")
+    }
 
     fn new() -> TestContext {
-        let server = RedisServer::new();
-
-        let client = redis::Client::open(redis::ConnectionInfo {
-            addr: Box::new(server.get_client_addr()),
-            db: 0,
-            passwd: None,
-        }).unwrap();
-        let con;
-
-        let millisecond = Duration::from_millis(1);
-        loop {
-            match client.get_connection() {
-                Err(err) => {
-                    if err.is_connection_refusal() {
-                        sleep(millisecond);
-                    } else {
-                        panic!("Could not connect: {}", err);
-                    }
-                },
-                Ok(x) => { con = x; break; },
-            }
-        }
-        redis::cmd("FLUSHDB").execute(&con);
-
-        TestContext {
-            server: server,
-            client: client,
-        }
+        let con=ReadWrap(UnixStream::connect(Self::sock_path()).expect("Could not connect to Redis server"));
+        let ctx=TestContext{con:RefCell::new(con)};
+        redis::cmd("FLUSHDB").execute(&ctx);
+        ctx
     }
 
-    fn connection(&self) -> redis::Connection {
-        self.client.get_connection().unwrap()
+    pub fn send_bytes(&self, cmd: &[u8]) {
+        self.con.borrow_mut().0.write_all(cmd).expect("Redis write error");
     }
 
-    fn pubsub(&self) -> redis::PubSub {
-        self.client.get_pubsub().unwrap()
+    pub fn read_response(&self) -> RedisResult<Value> {
+        let result = Parser::new(&mut*self.con.borrow_mut()).parse_value();
+        match result {
+            Err(ref e) if e.kind() == redis::ErrorKind::ResponseError => {  panic!("Protocol error") }
+            _ => ()
+        }
+        result
     }
 }
 
+impl redis::ConnectionLike for TestContext {
+    fn req_packed_command(&self, cmd: &[u8]) -> RedisResult<Value> {
+        self.send_bytes(cmd);
+        self.read_response()
+    }
 
-#[test]
+    fn req_packed_commands(&self, cmd: &[u8], offset: usize, count: usize) -> RedisResult<Vec<Value>> {
+        self.send_bytes(cmd);
+        let mut rv = vec![];
+        for idx in 0..(offset + count) {
+            let item = try!(self.read_response());
+            if idx >= offset {
+                rv.push(item);
+            }
+        }
+        Ok(rv)
+    }
+
+    fn get_db(&self) -> i64 { unimplemented!() }
+}
+
+impl Commands for TestContext {}
+
+impl GetConnection<TestContext> for TestContext {
+    fn connection(self) -> TestContext {
+        self
+    }
+}
+
 fn test_args() {
     let ctx = TestContext::new();
     let con = ctx.connection();
@@ -122,7 +95,6 @@ fn test_args() {
                Ok(("foo".to_string(), b"bar".to_vec())));
 }
 
-#[test]
 fn test_getset() {
     let ctx = TestContext::new();
     let con = ctx.connection();
@@ -134,7 +106,6 @@ fn test_getset() {
     assert_eq!(redis::cmd("GET").arg("bar").query(&con), Ok(b"foo".to_vec()));
 }
 
-#[test]
 fn test_incr() {
     let ctx = TestContext::new();
     let con = ctx.connection();
@@ -143,7 +114,6 @@ fn test_incr() {
     assert_eq!(redis::cmd("INCR").arg("foo").query(&con), Ok(43usize));
 }
 
-#[test]
 fn test_info() {
     let ctx = TestContext::new();
     let con = ctx.connection();
@@ -156,7 +126,6 @@ fn test_info() {
     assert!(info.contains_key(&"role"));
 }
 
-#[test]
 fn test_hash_ops() {
     let ctx = TestContext::new();
     let con = ctx.connection();
@@ -170,7 +139,6 @@ fn test_hash_ops() {
     assert_eq!(h.get("key_2"), Some(&2i32));
 }
 
-#[test]
 fn test_set_ops() {
     let ctx = TestContext::new();
     let con = ctx.connection();
@@ -191,7 +159,6 @@ fn test_set_ops() {
     assert!(set.contains(&3i32));
 }
 
-#[test]
 fn test_scan() {
     let ctx = TestContext::new();
     let con = ctx.connection();
@@ -207,7 +174,6 @@ fn test_scan() {
     assert_eq!(&s, &[1, 2, 3]);
 }
 
-#[test]
 fn test_optionals() {
     let ctx = TestContext::new();
     let con = ctx.connection();
@@ -223,7 +189,6 @@ fn test_optionals() {
     assert_eq!(a, 0i32);
 }
 
-#[test]
 fn test_json() {
     use serialize::json::Json;
 
@@ -240,7 +205,6 @@ fn test_json() {
     ]));
 }
 
-#[test]
 fn test_scanning() {
     let ctx = TestContext::new();
     let con = ctx.connection();
@@ -262,7 +226,6 @@ fn test_scanning() {
     assert_eq!(unseen.len(), 0);
 }
 
-#[test]
 fn test_filtered_scanning() {
     let ctx = TestContext::new();
     let con = ctx.connection();
@@ -286,7 +249,6 @@ fn test_filtered_scanning() {
     assert_eq!(unseen.len(), 0);
 }
 
-#[test]
 fn test_pipeline() {
     let ctx = TestContext::new();
     let con = ctx.connection();
@@ -300,7 +262,6 @@ fn test_pipeline() {
     assert_eq!(k2, 43);
 }
 
-#[test]
 fn test_empty_pipeline() {
     let ctx = TestContext::new();
     let con = ctx.connection();
@@ -312,7 +273,6 @@ fn test_empty_pipeline() {
     let _ : () = redis::pipe().query(&con).unwrap();
 }
 
-#[test]
 fn test_pipeline_transaction() {
     let ctx = TestContext::new();
     let con = ctx.connection();
@@ -327,7 +287,6 @@ fn test_pipeline_transaction() {
     assert_eq!(k2, 43);
 }
 
-#[test]
 fn test_real_transaction() {
     let ctx = TestContext::new();
     let con = ctx.connection();
@@ -354,7 +313,6 @@ fn test_real_transaction() {
     }
 }
 
-#[test]
 fn test_real_transaction_highlevel() {
     let ctx = TestContext::new();
     let con = ctx.connection();
@@ -372,33 +330,6 @@ fn test_real_transaction_highlevel() {
     assert_eq!(response, (43,));
 }
 
-#[test]
-fn test_pubsub() {
-    let ctx = TestContext::new();
-    let con = ctx.connection();
-
-    let mut pubsub = ctx.pubsub();
-    pubsub.subscribe("foo").unwrap();
-
-    let thread = spawn(move || {
-        sleep(Duration::from_millis(100));
-
-        let msg = pubsub.get_message().unwrap();
-        assert_eq!(msg.get_channel(), Ok("foo".to_string()));
-        assert_eq!(msg.get_payload(), Ok(42));
-
-        let msg = pubsub.get_message().unwrap();
-        assert_eq!(msg.get_channel(), Ok("foo".to_string()));
-        assert_eq!(msg.get_payload(), Ok(23));
-    });
-
-    redis::cmd("PUBLISH").arg("foo").arg(42).execute(&con);
-    redis::cmd("PUBLISH").arg("foo").arg(23).execute(&con);
-
-    thread.join().ok().expect("Something went wrong");
-}
-
-#[test]
 fn test_script() {
     let ctx = TestContext::new();
     let con = ctx.connection();
@@ -413,7 +344,6 @@ fn test_script() {
     assert_eq!(response, Ok(("foo".to_string(), 42)));
 }
 
-#[test]
 fn test_tuple_args() {
     let ctx = TestContext::new();
     let con = ctx.connection();
@@ -427,7 +357,6 @@ fn test_tuple_args() {
     assert_eq!(redis::cmd("HGET").arg("my_key").arg("field_2").query(&con), Ok(23));
 }
 
-#[test]
 fn test_nice_api() {
     let ctx = TestContext::new();
     let con = ctx.connection();
@@ -446,7 +375,6 @@ fn test_nice_api() {
     assert_eq!(k2, 43);
 }
 
-#[test]
 fn test_auto_m_versions() {
     let ctx = TestContext::new();
     let con = ctx.connection();
@@ -455,7 +383,6 @@ fn test_auto_m_versions() {
     assert_eq!(con.get(&["key1", "key2"]), Ok((1, 2)));
 }
 
-#[test]
 fn test_nice_hash_api() {
     let ctx = TestContext::new();
     let con = ctx.connection();
@@ -500,7 +427,6 @@ fn test_nice_hash_api() {
     assert_eq!(found.contains(&("f4".to_string(), 8)), true);
 }
 
-#[test]
 fn test_nice_list_api() {
     let ctx = TestContext::new();
     let con = ctx.connection();
@@ -515,7 +441,6 @@ fn test_nice_list_api() {
     assert_eq!(con.lrange("my_list", 0, 2), Ok((2, 3, 4)));
 }
 
-#[test]
 fn test_tuple_decoding_regression() {
     let ctx = TestContext::new();
     let con = ctx.connection();
@@ -532,8 +457,7 @@ fn test_tuple_decoding_regression() {
     let vec : Vec<(String,u32)> = con.zrangebyscore_withscores("my_zset", 0, 10).unwrap();
     assert_eq!(vec.len(), 0);
 }
-
-#[test]
+/*
 fn test_invalid_protocol() {
     use std::thread;
     use std::error::Error;
@@ -565,4 +489,31 @@ fn test_invalid_protocol() {
     assert_eq!(result.unwrap_err().kind(), redis::ErrorKind::IoError);
 
     child.join().unwrap().unwrap();
+}
+*/
+fn main() {
+    test_args();
+    test_getset();
+    test_incr();
+    test_info();
+    test_hash_ops();
+    test_set_ops();
+    test_scan();
+    test_optionals();
+    test_json();
+    test_scanning();
+    test_filtered_scanning();
+    test_pipeline();
+    test_empty_pipeline();
+    test_pipeline_transaction();
+    test_real_transaction();
+    test_real_transaction_highlevel();
+    test_script();
+    test_tuple_args();
+    test_nice_api();
+    test_auto_m_versions();
+    test_nice_hash_api();
+    test_nice_list_api();
+    test_tuple_decoding_regression();
+    //test_invalid_protocol();
 }

@@ -1,4 +1,6 @@
 use sha1::Sha1;
+use collections::{String,Vec};
+use collections::string::ToString;
 
 use cmd::cmd;
 use types::{ToRedisArgs, FromRedisValue, RedisResult, ErrorKind};

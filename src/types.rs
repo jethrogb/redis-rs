@@ -1,12 +1,24 @@
-use std::error;
-use std::fmt;
-use std::io;
-use std::hash::Hash;
-use std::str::{from_utf8, Utf8Error};
-use std::collections::{HashMap, HashSet};
-use std::convert::From;
+use core::fmt;
+use core::hash::Hash;
+use core::str::{from_utf8, Utf8Error};
+use collections::{String,Vec};
+use collections::string::ToString;
+use core_collections::{HashMap, HashSet};
+use core::convert::From;
 use serialize::json;
 
+#[derive(Debug)]
+pub struct ReadError;
+
+impl fmt::Display for ReadError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        f.write_str("Read error")
+    }
+}
+
+pub trait Read {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize,ReadError>;
+}
 
 /// Helper enum that is used in some situations to describe
 /// the behavior of arguments in a numeric context.
@@ -143,7 +155,7 @@ enum ErrorRepr {
     WithDescription(ErrorKind, &'static str),
     WithDescriptionAndDetail(ErrorKind, &'static str, String),
     ExtensionError(String, String),
-    IoError(io::Error),
+    IoError(ReadError),
 }
 
 impl PartialEq for RedisError {
@@ -166,9 +178,9 @@ impl PartialEq for RedisError {
     }
 }
 
-impl From<io::Error> for RedisError {
+impl From<ReadError> for RedisError {
 
-    fn from(err: io::Error) -> RedisError {
+    fn from(err: ReadError) -> RedisError {
         RedisError { repr: ErrorRepr::IoError(err) }
     }
 }
@@ -191,25 +203,6 @@ impl From<(ErrorKind, &'static str, String)> for RedisError {
 
     fn from((kind, desc, detail): (ErrorKind, &'static str, String)) -> RedisError {
         RedisError { repr: ErrorRepr::WithDescriptionAndDetail(kind, desc, detail) }
-    }
-}
-
-impl error::Error for RedisError {
-
-    fn description(&self) -> &str {
-        match self.repr {
-            ErrorRepr::WithDescription(_, desc) => desc,
-            ErrorRepr::WithDescriptionAndDetail(_, desc, _) => desc,
-            ErrorRepr::ExtensionError(_, _) => "extension error",
-            ErrorRepr::IoError(ref err) => err.description(),
-        }
-    }
-
-    fn cause(&self) -> Option<&error::Error> {
-        match self.repr {
-            ErrorRepr::IoError(ref err) => Some(err as &error::Error),
-            _ => None,
-        }
     }
 }
 
@@ -283,19 +276,7 @@ impl RedisError {
     /// unless you are writing unit tests that want to detect if a
     /// local server is available.
     pub fn is_connection_refusal(&self) -> bool {
-        match self.repr {
-            ErrorRepr::IoError(ref err) => {
-                match err.kind() {
-                    io::ErrorKind::ConnectionRefused => true,
-                    // if we connect to a unix socket and the file does not
-                    // exist yet, then we want to treat this as if it was a
-                    // connection refusal.
-                    io::ErrorKind::NotFound => cfg!(feature="unix_socket"),
-                    _ => false,
-                }
-            }
-            _ => { false }
-        }
+        false
     }
 
     /// Returns the extension error code

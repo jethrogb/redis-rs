@@ -1,8 +1,7 @@
-use std::io::{Read, BufReader};
-use std::str::from_utf8;
+use collections::{String,Vec};
+use collections::string::ToString;
 
-use types::{RedisResult, Value, ErrorKind, make_extension_error};
-
+use types::{RedisResult, Value, ErrorKind, Read, make_extension_error};
 
 /// The internal redis response parser.
 pub struct Parser<T> {
@@ -180,14 +179,4 @@ impl<'a, T: Read> Parser<T> {
             None => fail!((kind, desc))
         }
     }
-}
-
-
-/// Parses bytes into a redis value.
-///
-/// This is the most straightforward way to parse something into a low
-/// level redis value instead of having to use a whole parser.
-pub fn parse_redis_value(bytes: &[u8]) -> RedisResult<Value> {
-    let mut parser = Parser::new(BufReader::new(bytes));
-    parser.parse_value()
 }
