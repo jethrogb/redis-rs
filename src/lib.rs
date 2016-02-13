@@ -307,7 +307,7 @@
 
 #![deny(non_camel_case_types)]
 
-extern crate rustc_serialize as serialize;
+extern crate core_rustc_serialize as serialize;
 #[macro_use]
 extern crate collections;
 extern crate core_collections;

@@ -1,13 +1,13 @@
 extern crate redis;
 extern crate core_collections;
-extern crate rustc_serialize as serialize;
+extern crate core_rustc_serialize as serialize;
 extern crate unix_socket;
 
 use redis::{Commands, PipelineCommands, RedisResult, Value, Parser};
 
 use core_collections::{HashMap, HashSet};
 
-use std::io::{Read,Write};
+use std::io::{Read,Write,BufReader};
 use unix_socket::UnixStream;
 use std::cell::RefCell;
 
@@ -15,7 +15,7 @@ trait GetConnection<T: redis::ConnectionLike> {
     fn connection(self) -> T;
 }
 
-struct ReadWrap(UnixStream);
+struct ReadWrap(BufReader<UnixStream>);
 
 impl<'a> redis::Read for &'a mut ReadWrap {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize,redis::ReadError> {
@@ -35,14 +35,14 @@ impl TestContext {
     }
 
     fn new() -> TestContext {
-        let con=ReadWrap(UnixStream::connect(Self::sock_path()).expect("Could not connect to Redis server"));
+        let con=ReadWrap(BufReader::new(UnixStream::connect(Self::sock_path()).expect("Could not connect to Redis server")));
         let ctx=TestContext{con:RefCell::new(con)};
         redis::cmd("FLUSHDB").execute(&ctx);
         ctx
     }
 
     pub fn send_bytes(&self, cmd: &[u8]) {
-        self.con.borrow_mut().0.write_all(cmd).expect("Redis write error");
+        self.con.borrow_mut().0.get_mut().write_all(cmd).expect("Redis write error");
     }
 
     pub fn read_response(&self) -> RedisResult<Value> {
