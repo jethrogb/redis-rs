@@ -308,7 +308,6 @@
 #![deny(non_camel_case_types)]
 
 extern crate rustc_serialize as serialize;
-extern crate sha1;
 #[macro_use]
 extern crate collections;
 extern crate core_collections;
@@ -358,3 +357,4 @@ mod types;
 mod script;
 mod cmd;
 mod commands;
+mod sha1;

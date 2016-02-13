@@ -1,8 +1,10 @@
+// Adapted from https://github.com/mitsuhiko/rust-sha1/commit/b5179cee
+
 //! A minimal implementation of SHA1 for rust.
 //!
 //! Example:
 //!
-//! ```rust
+//! ```ignore
 //! extern crate sha1;
 //! # fn main() {
 //!
@@ -13,10 +15,9 @@
 //! # }
 //! ```
 
-extern crate byteorder;
-use std::io::{Cursor,Write};
-use std::io::BufWriter;
-use byteorder::{BigEndian, WriteBytesExt};
+#![allow(dead_code)]
+
+use collections::{String,Vec};
 
 /// Represents a Sha1 hash object in memory.
 #[derive(Clone)]
@@ -141,22 +142,31 @@ impl Sha1 {
             len: 0,
         };
 
-        let mut w : Cursor<Vec<u8>> = Cursor::new(Vec::new());
-        w.write(&*self.data);
-        w.write_all(&[0x80]);
+        let mut w = self.data.clone();
+        w.push(0x80);
         let padding = 64 - ((self.data.len() + 9) % 64);
         for _ in 0..padding {
-            w.write(&[0u8]);
+            w.push(0);
         }
 
-        w.write_u64::<BigEndian>((self.data.len() as u64 + self.len) * 8);
-        for chunk in w.into_inner().chunks(64) {
+        let bits=(self.data.len() as u64 + self.len) * 8;
+        w.push((bits>>0x38) as u8);
+        w.push((bits>>0x30) as u8);
+        w.push((bits>>0x28) as u8);
+        w.push((bits>>0x20) as u8);
+        w.push((bits>>0x18) as u8);
+        w.push((bits>>0x10) as u8);
+        w.push((bits>>0x08) as u8);
+        w.push((bits>>0x00) as u8);
+        for chunk in w.chunks(64) {
             m.process_block(chunk);
         }
 
-        let mut w = BufWriter::new(out);
-        for &n in m.state.iter() {
-            w.write_u32::<BigEndian>(n);
+        for (&n,o) in m.state.iter().zip(out.chunks_mut(4)) {
+            o[0]=(n>>0x18) as u8;
+            o[1]=(n>>0x10) as u8;
+            o[2]=(n>>0x08) as u8;
+            o[3]=(n>>0x00) as u8;
         }
     }
 
