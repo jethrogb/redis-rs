@@ -16,8 +16,8 @@ readme = "README.md"
 #git = "https://github.com/servo/rust-url"
 
 [dependencies]
-core_rustc-serialize = "0.3.18"
-core_collections = "0.1.1"
+core_rustc-serialize = "0.3.20-v0.3.19patch1"
+core_collections = "0.3"
 
 [dev-dependencies]
 unix_socket = "0.5"
